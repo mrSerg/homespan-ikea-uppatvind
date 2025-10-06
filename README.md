@@ -219,3 +219,14 @@ Inspired by
 [horvathgergo/esp8266-for-uppatvind](https://github.com/horvathgergo/esp8266-for-uppatvind)
 
 Adapted and extended with **HomeSpan Matter integration**
+
+---
+
+## Tags for search
+
+- IKEA apple home
+- Uppatvind smart
+- Uppatvind apple
+- Purifier ikea apple home
+- Add Uppatvind to apple home
+- Uppatvind Apple homekit
