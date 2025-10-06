@@ -1,7 +1,7 @@
 # HomeSpan IKEA UPPÅTVIND
 
 Apple home-compatible ESP32 retrofit controller for the **IKEA UPPÅTVIND** air purifier.
-This project not replaces the original control logic with a **HomeSpan-based ESP32**, it integrates directly with *
+This project not replaces the original control logic with a **HomeSpan-based ESP32**, it integrates directly with original board, and add *
 *Apple Home (HomeKit via HomeSpan lib)** — while keeping the original purifier electronics fully functional.
 
 The board simply attaches to the existing control PCB using four wires:
@@ -38,11 +38,11 @@ Below is the basic wiring setup between the ESP32 dev board and the purifier con
 +----------------------------------+
 |        IKEA UPPÅTVIND PCB        |
 |                                  |
-|  [LED Signal] ----- SIGNAL_PIN   |
-|  [Button] -------- EMULATEPIN    |
-|  [Fan PWM Input] - PWMPIN        |
-|  [GND] ----------- GND           |
-|  [+5v] ----------- VIN           |
+|  [SIGNAL_PIN] ----- TP7          |
+|  [EMULATEPIN] -------- TP4       |
+|  [PWMPIN] - WIRE Black to fan    |
+|  [GND] ----------- TP2           |
+|  [VIN] ----------- TP3           |
 +----------------------------------+
              |
              v
@@ -54,6 +54,7 @@ Below is the basic wiring setup between the ESP32 dev board and the purifier con
 |  PWMPIN       = GPIO 18 (PWM Out)|
 |  LED_PIN      = GPIO 2  (Status) |
 |  GND          = Common Ground    |
+|  VIN          = +5v              |
 +----------------------------------+
 ```
 
