@@ -124,6 +124,7 @@ String htmlEscape(const String &text) {
 const char *PORTAL_HEAD =
   "<!doctype html><html><head><meta charset=utf-8>"
   "<meta name=viewport content='width=device-width,initial-scale=1'>"
+  "<meta name=format-detection content='telephone=no'>"
   "<title>UPPÅTVIND setup</title><style>"
   "*{box-sizing:border-box}"
   "body{margin:0;background:#fff;color:#111;font:16px/1.5 'Noto Sans',-apple-system,system-ui,sans-serif}"
@@ -146,6 +147,9 @@ const char *PORTAL_HEAD =
   "button.secondary{background:#fff;color:#111;border-color:#dfdfdf}"
   "input[type=file]{height:auto;padding:14px 16px}"
   "hr{border:0;border-top:1px solid #dfdfdf;margin:40px 0 0}"
+  "a[href^=tel]{color:inherit;text-decoration:none}"
+  ".bar{height:8px;background:#dfdfdf;border-radius:4px;overflow:hidden;margin:12px 0 4px}"
+  ".bar i{display:block;height:100%;width:0;background:#0058a3;transition:width .2s}"
   "</style></head><body><header><b>UPPÅTVIND</b><span>Apple Home setup</span></header><main>";
 
 const char *PORTAL_FOOT = "</main></body></html>";
@@ -170,6 +174,14 @@ const char *NETWORKS_POLL_SCRIPT =
   "?r.text().then(h=>{network.innerHTML=h;other.hidden=network.value!=''})"
   ":setTimeout(poll,1000))})()</script>";
 
+const char *FIRMWARE_UPLOAD_SCRIPT =
+  "<script>fw.onsubmit=function(e){e.preventDefault();var x=new XMLHttpRequest();x.open('POST','/update');"
+  "x.upload.onprogress=function(p){var v=Math.round(p.loaded*100/p.total);fwbar.style.width=v+'%';"
+  "fwstatus.textContent=v<100?'Uploading '+v+'%':'Installing... do not power off'};"
+  "x.onload=function(){document.open();document.write(x.responseText);document.close()};"
+  "x.onerror=function(){fwstatus.textContent='Upload failed. Reconnect to the setup Wi-Fi and try again.'};"
+  "fwprogress.hidden=false;fw.querySelector('button').disabled=true;x.send(new FormData(fw))}</script>";
+
 String portalPage() {
   return String(PORTAL_HEAD) +
     "<h2><i>1</i>Save your setup code</h2>" + pairingCodeBlock(portalPairingCode) +
@@ -185,10 +197,11 @@ String portalPage() {
     "<button>Save and connect</button></form>"
     "<form method=post action=/scan><button class=secondary>Scan again</button></form>"
     "<hr><h2>Firmware update</h2>"
-    "<form method=post action=/update enctype=multipart/form-data>"
+    "<form id=fw method=post action=/update enctype=multipart/form-data>"
     "<input type=file name=firmware accept=.bin required>"
     "<small>Firmware .bin file (Arduino IDE: Sketch → Export Compiled Binary).</small>"
-    "<button class=secondary>Upload and install</button></form>" +
+    "<div id=fwprogress hidden><div class=bar><i id=fwbar></i></div><small id=fwstatus></small></div>"
+    "<button class=secondary>Upload and install</button></form>" + FIRMWARE_UPLOAD_SCRIPT +
     (portalScanning ? NETWORKS_POLL_SCRIPT : "") + PORTAL_FOOT;
 }
 
