@@ -161,14 +161,15 @@ Board connections
     * On first start (or after a reset) the purifier creates the Wi-Fi network **IKEA-Uppatvind**,
       password `uppatvind`.
     * Join it from your phone — the setup page opens automatically (or go to `http://192.168.4.1`).
-    * The page shows the **pairing code** — write it down (or press *Generate new code* first).
+    * The page shows the **pairing QR code and code** — take a screenshot or write it down
+      (or press *Generate new code* first).
     * Choose your home network, enter its password and press *Save and connect*. The purifier reboots
       and joins your network; the setup access point is gone until the next reset.
 
 5. **Pair with Apple Home**
 
     * In the **Apple Home app** tap *Add Accessory → More options*, pick **Purifier Uppatvind**
-      and enter the pairing code from the setup page.
+      and enter the pairing code from the setup page, or scan the saved QR code (e.g. shown on another screen).
     * After setup, the device will automatically reconnect after reboot.
 
 ### Reset

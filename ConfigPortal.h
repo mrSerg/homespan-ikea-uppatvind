@@ -4,6 +4,8 @@
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <Preferences.h>
+#include <HomeSpan.h>
+#include <qrcode.h>
 
 const char *AP_SSID = "IKEA-Uppatvind";
 const char *AP_PASSWORD = "uppatvind";
@@ -78,6 +80,29 @@ String formatPairingCode(const String &code) {
   return code.substring(0, 3) + "-" + code.substring(3, 5) + "-" + code.substring(5);
 }
 
+String *qrSvgTarget = nullptr;
+
+void appendQrSvg(esp_qrcode_handle_t qrcode) {
+  int size = esp_qrcode_get_size(qrcode);
+  String path;
+  for (int y = 0; y < size; y++) {
+    for (int x = 0; x < size; x++) {
+      if (esp_qrcode_get_module(qrcode, x, y)) path += "M" + String(x) + " " + String(y) + "h1v1h-1z";
+    }
+  }
+  *qrSvgTarget += "<svg class=qr viewBox='-4 -4 " + String(size + 8) + " " + String(size + 8) +
+    "' shape-rendering=crispEdges><rect x=-4 y=-4 width=100% height=100% fill=#fff /><path d='" + path + "'/></svg>";
+}
+
+String pairingQrSvg(const String &code) {
+  String svg;
+  qrSvgTarget = &svg;
+  esp_qrcode_config_t config = {appendQrSvg, 10, ESP_QRCODE_ECC_MED};
+  esp_qrcode_generate(&config, HapQR().get(code.toInt(), DEFAULT_QR_ID, (uint8_t)Category::AirPurifiers));
+  qrSvgTarget = nullptr;
+  return svg;
+}
+
 String htmlEscape(const String &text) {
   String escaped;
   for (char c : text) {
@@ -99,17 +124,25 @@ const char *PORTAL_HEAD =
   "body{font-family:-apple-system,system-ui,sans-serif;max-width:420px;margin:24px auto;padding:0 16px;color:#111}"
   "h2{font-size:18px;margin:24px 0 8px}"
   ".code{font-size:40px;font-weight:600;letter-spacing:2px;text-align:center;margin:12px 0}"
+  ".qr{display:block;width:220px;margin:0 auto}"
+  ".warning{font-weight:700;text-align:center;color:#c00;margin:12px 0}"
   "input,button{width:100%;font-size:17px;padding:12px;margin:6px 0;box-sizing:border-box;border-radius:8px;border:1px solid #bbb}"
   "button{background:#0071e3;color:#fff;border:0}.secondary{background:#e8e8ed;color:#111}"
   "small{display:block;color:#666;margin-top:4px}"
   "</style></head><body>";
 
+String pairingCodeBlock(const String &code) {
+  return pairingQrSvg(code) +
+    "<div class=code>" + formatPairingCode(code) + "</div>"
+    "<div class=warning>SAVE THIS BEFORE CONNECTING</div>"
+    "<small>Take a screenshot or write the code down. After the purifier joins your Wi-Fi, "
+    "add it in the Home app by scanning the QR code or entering the code.</small>";
+}
+
 String portalPage() {
   return String(PORTAL_HEAD) +
-    "<h2>Apple Home pairing code</h2>"
-    "<div class=code>" + formatPairingCode(portalPairingCode) + "</div>"
+    "<h2>Apple Home setup code</h2>" + pairingCodeBlock(portalPairingCode) +
     "<form method=post action=/new-code><button class=secondary>Generate new code</button></form>"
-    "<small>Write this code down: you will need it to add the purifier in the Home app.</small>"
     "<h2>Wi-Fi network</h2>"
     "<form method=post action=/save>"
     "<input type=hidden name=code value=" + portalPairingCode + ">"
@@ -131,7 +164,7 @@ void handlePortalSave() {
   saveConfig(ssid, portalServer.arg("password"), code);
   portalServer.send(200, "text/html", String(PORTAL_HEAD) +
     "<h2>Saved</h2><p>The purifier is connecting to <b>" + htmlEscape(ssid) + "</b>.</p>"
-    "<p>Add it in the Home app with the code</p><div class=code>" + formatPairingCode(code) + "</div>"
+    "<p>Add it in the Home app with this code:</p>" + pairingCodeBlock(code) +
     "<small>Wrong Wi-Fi password? Hold the purifier button for 5 seconds to start over.</small></body></html>");
   delay(1000);
   ESP.restart();
