@@ -1,8 +1,8 @@
 # HomeSpan IKEA UPPÅTVIND
 
 Apple home-compatible ESP32 retrofit controller for the **IKEA UPPÅTVIND** air purifier.
-This project not replaces the original control logic with a **HomeSpan-based ESP32**, it integrates directly with original board, and add *
-*Apple Home (HomeKit via HomeSpan lib)** — while keeping the original purifier electronics fully functional.
+This project doesn't replace the original control logic: a **HomeSpan-based ESP32** connects directly to the original board and adds
+**Apple Home (HomeKit via the HomeSpan library)** support, while the original button and LED keep working.
 
 The board simply attaches to the existing control PCB using four wires:
 
@@ -23,7 +23,8 @@ The board simply attaches to the existing control PCB using four wires:
     * Physical button presses
     * Home app commands
 * On-board LED heartbeat (blinks to indicate activity or running state)
-* Simple configuration — Wi-Fi credentials are set directly in code
+* Setup from the phone — without Wi-Fi the purifier starts its own access point with a one-page setup
+* Hold the purifier button for 5 seconds to reset Wi-Fi and HomeKit pairing
 * No web interface or cloud dependency
 
 ---
@@ -89,7 +90,7 @@ U1--R1--TP4--o   o--GND
 The main LED (LED1) of the UPPÅTVIND has 4 states, off, and low, medium, and high brightnesses. The PWM is used to
 control the brightness.
 
-The LED has similar wiring but instead of the ESP32 using an output ping, the it'll uses an input pin connected to TP7.
+The LED has similar wiring, but instead of an output pin the ESP32 uses an input pin connected to TP7.
 The ESP32 can then measure the pulse width to sense the LED brightness.
 
 ```
@@ -99,19 +100,19 @@ U1--TP7--LED1--GND
    ESP32
 ```
 
-| UPPÅTVIND | Wemos D1 | Notes                                                      |
-|-----------|----------|------------------------------------------------------------|
-| TP2       | GND      |
-| TP3       | 5V       |
-| TP4       | D5       | TP4 is between the button switch at S1 and the UPPÅTVIND   |
-| TP7       | D6       | TP7 is between anode (positive) side of LED1 the UPPÅTVIND |
+| UPPÅTVIND | ESP32   | Notes                                                      |
+|-----------|---------|------------------------------------------------------------|
+| TP2       | GND     |                                                            |
+| TP3       | VIN     | +5V                                                        |
+| TP4       | GPIO 25 | TP4 is between the button switch at S1 and the UPPÅTVIND   |
+| TP7       | GPIO 35 | TP7 is between anode (positive) side of LED1 the UPPÅTVIND |
 
 
 ![Board](assets/board-top.jpg)
 
 Board connections
 
-- Power up ESP32 board: TP3 AND TP32 (TP3 is +5v, TP2 is GND)
+- Power up ESP32 board: TP3 and TP2 (TP3 is +5V, TP2 is GND)
 - Button imitate press: TP4
 - LED check state: TP7
 
@@ -124,8 +125,11 @@ Board connections
 * When the **Home app** changes the purifier state (On/Off or speed), the ESP32:
 
     * If purifier is off → simulates one physical press to power it on.
+    * If purifier is turned off → simulates as many presses as needed to cycle the original board to off
+      (the button cycles 1 → 2 → 3 → off).
     * Adjusts the PWM output frequency to match the desired speed.
 * LED signal analysis is based on **PWM high/low timing** to infer brightness and thus speed mode.
+  A new level is accepted only after two consecutive matching samples, to filter glitches.
 * The **on-board LED** (GPIO 2) blinks periodically to confirm operation or watchdog activity.
 
 ---
@@ -139,15 +143,12 @@ Board connections
    cd homespan-ikea-uppatvind
    ```
 
-2. **Open in Arduino IDE / PlatformIO**
+2. **Open in Arduino IDE**
 
     * Install the [HomeSpan](https://github.com/HomeSpan/HomeSpan) library.
     * Select the correct board: **ESP32 Dev Module**.
-    * Configure your Wi-Fi credentials inside the source code:
-
-      ```cpp
-      homeSpan.setWiFiCredentials("YourWiFiName", "YourWiFiPassword");
-      ```
+    * Set **Tools → Partition Scheme → Huge APP (3MB No OTA/1MB SPIFFS)** — HomeSpan doesn't fit the default 1.2MB app partition.
+    * Open `homespan-ikea-uppatvind.ino`.
 
 3. **Flash the firmware**
 
@@ -155,11 +156,25 @@ Board connections
     * Upload the sketch.
     * Open the serial monitor (115200 baud) to verify connection.
 
-4. **Pair with Apple Home**
+4. **Connect to Wi-Fi**
 
-    * When powered for the first time, the device will advertise itself as a new Matter accessory.
-    * Add it in the **Apple Home app** using the pairing code displayed in the serial log.
+    * On first start (or after a reset) the purifier creates the Wi-Fi network **IKEA-Uppatvind**,
+      password `uppatvind`.
+    * Join it from your phone — the setup page opens automatically (or go to `http://192.168.4.1`).
+    * The page shows the **pairing code** — write it down (or press *Generate new code* first).
+    * Choose your home network, enter its password and press *Save and connect*. The purifier reboots
+      and joins your network; the setup access point is gone until the next reset.
+
+5. **Pair with Apple Home**
+
+    * In the **Apple Home app** tap *Add Accessory → More options*, pick **Purifier Uppatvind**
+      and enter the pairing code from the setup page.
     * After setup, the device will automatically reconnect after reboot.
+
+### Reset
+
+Hold the purifier button for **5 seconds**: Wi-Fi settings and HomeKit pairing are erased and the
+setup access point starts again. Remove the old purifier from the Home app before adding it again.
 
 ---
 
@@ -170,8 +185,8 @@ Board connections
 | **LED Signal**  | Provides PWM waveform representing purifier speed (OFF/LOW/MED/HIGH). |
 | **PWM Control** | ESP32 outputs PWM with frequency mapping to speed levels (75–320 Hz). |
 | **Button Sim.** | Digital pulse (~100 ms) emulates the purifier’s tactile button press. |
-| **Watchdog**    | Ensures ESP32 reboots if the firmware becomes unresponsive.           |
-| **HomeSpan**    | Handles Matter / Apple Home pairing and state synchronization.        |
+| **Watchdog**    | HomeSpan watchdog reboots the ESP32 if the firmware hangs for 15 s.   |
+| **HomeSpan**    | Handles HomeKit (Apple Home) pairing and state synchronization.       |
 
 ---
 
@@ -195,8 +210,8 @@ Board connections
 
 ## 🧬 Known Limitations
 
-* Wi-Fi credentials are hardcoded — no web UI for configuration.
-* Only supports four discrete fan levels (OFF / 1 / 2 / 3).
+* Apple Home can't pass Wi-Fi credentials to the purifier (that needs Apple's MFi-only WAC), so Wi-Fi is set up via the access point first.
+* The physical button only gives four discrete levels (OFF / 1 / 2 / 3); from Apple Home the speed is set smoothly (0–100%).
 * PWM frequency mapping may vary slightly depending on fan hardware tolerance.
 * Requires shared GND with purifier control board.
 
@@ -218,7 +233,7 @@ Inspired by
 
 [horvathgergo/esp8266-for-uppatvind](https://github.com/horvathgergo/esp8266-for-uppatvind)
 
-Adapted and extended with **HomeSpan Matter integration**
+Adapted and extended with **HomeSpan (HomeKit) integration**
 
 ---
 

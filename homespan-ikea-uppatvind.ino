@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include <HomeSpan.h> //Library for Apple Homekit
-#include <esp_task_wdt.h>  // Watchdog library
+#include "ConfigPortal.h"
 
 #define PWMPIN 18  // PWM control for the fan
 #define SIGNAL_PIN 35 // Read the LED signal
@@ -12,6 +12,11 @@ const int MAX_FREQ = 320;  // maximum frequency used when mapping percent->frequ
 
 const int LEDCCHANNEL = 0;
 const int LEDCRES = 8; // PWM resolution (bits)
+
+const unsigned long EMULATE_PRESS_MS = 100;  // how long the emulated button is held
+const unsigned long EMULATE_GAP_MS = 300;    // pause between consecutive emulated presses
+const unsigned long IGNORE_LEVEL_MS = 2000;  // must outlast two level samples (debounce)
+const unsigned long FACTORY_RESET_HOLD_MS = 5000;  // hold the purifier button this long to reset Wi-Fi and pairing
 
 // Timing variables updated by ISR to measure pulse widths
 volatile unsigned long riseTime = 0;
@@ -31,15 +36,37 @@ uint8_t getLevel(float dutyCycle) {
   else return 3;
 }
 
+// Translate discrete level (0..3) to approximate percent (-1 means off)
+int levelToPower(int level) {
+  switch (level) {
+    case 1: return 10;
+    case 2: return 40;
+    case 3: return 70;
+    default: return -1;
+  }
+}
+
 // State variables
 int lastLevel = -1;                 // last known discrete level (0..3)
 int lastAppliedPowerPercent = -1;   // last percent value sent to applyPower (-1 means off)
-unsigned long ignoreLevelUntil = 0; // timestamp until which level changes/logs are ignored (ms)
+bool ignoringLevel = false;         // are level changes / Home updates currently ignored?
+unsigned long ignoreLevelStart = 0; // when the ignore window started (ms)
+int pendingLevel = -1;              // level seen once, waiting for confirmation by the next sample
 bool emulating = false;             // are we currently emulating a button press?
-unsigned long emulateStartTime = 0; // when emulation started (ms)
+int pendingPresses = 0;             // emulated presses still to perform
+unsigned long emulateStartTime = 0; // when the current press started (ms)
+unsigned long emulateEndTime = 0;   // when the last press was released (ms)
 unsigned long lastLogTime = 0;      // last time we logged / toggled LED (ms)
 const unsigned long logInterval = 500; // logging interval (ms)
 bool ledState = false;              // internal LED toggle state for heartbeat
+bool portalMode = false;            // no Wi-Fi configured: serving the config portal instead of HomeKit
+bool buttonHeld = false;            // is the physical button currently held?
+unsigned long buttonHoldStart = 0;  // when the physical button was pressed (ms)
+
+bool isIgnoringLevel(unsigned long now) {
+  if (ignoringLevel && now - ignoreLevelStart >= IGNORE_LEVEL_MS) ignoringLevel = false;
+  return ignoringLevel;
+}
 
 // Convert percent [0..100] to frequency between MIN_FREQ and MAX_FREQ
 int percentToFreq(int percent) {
@@ -70,11 +97,9 @@ void IRAM_ATTR signalISR() {
 }
 
 // Apply power to the fan. percent < 0 => OFF.
-// This function uses your original PWMed API calls (kept unchanged).
 void applyPower(int percent) {
   if (percent < 0) {
     Serial.println("applyPower: OFF");
-    ledcWrite(PWMPIN, 0);
     ledcWriteTone(PWMPIN, 0);
   } else {
     int freq = percentToFreq(percent);
@@ -82,9 +107,6 @@ void applyPower(int percent) {
     Serial.print(percent);
     Serial.print(", freq = ");
     Serial.println(freq);
-
-    // Keep original behavior: write full duty (255) and set tone frequency.
-    ledcWrite(PWMPIN, 255);
     ledcWriteTone(PWMPIN, freq);
   }
 }
@@ -93,25 +115,30 @@ void applyPower(int percent) {
 struct MyPurifier : Service::AirPurifier {
   int power = -1;                   // current internal power representation (-1 off, >=0 percent)
   SpanCharacteristic *active;
+  SpanCharacteristic *currentState;
+  SpanCharacteristic *targetState;
   SpanCharacteristic *rotationSpeed;
 
   MyPurifier()
     : Service::AirPurifier() {
     // HomeKit characteristics: Active and RotationSpeed
     active = new Characteristic::Active(0);
+    currentState = new Characteristic::CurrentAirPurifierState(0);  // required by HomeKit, without it Home hides speed control
+    targetState = new Characteristic::TargetAirPurifierState(0);    // MANUAL
     rotationSpeed = new Characteristic::RotationSpeed(0);
   }
 
   // Called by HomeKit when user changes characteristics (toggle or speed)
   boolean update() override {
-    // If we are within ignore window (e.g. right after emulation), ignore Home updates
-    if (millis() < ignoreLevelUntil) return true;
+    // Reject Home updates right after emulation so Home doesn't show a state that was never applied
+    if (isIgnoringLevel(millis())) return false;
 
     // Determine new power: if Active is off -> -1, otherwise use rotationSpeed
     int newPower = active->getNewVal() ? rotationSpeed->getNewVal() : -1;
     if (newPower != power) {
       power = newPower;
       applyPowerFromHome(power); // handle change coming from HomeKit
+      syncCurrentState();
     }
     return true;
   }
@@ -119,23 +146,23 @@ struct MyPurifier : Service::AirPurifier {
   // Called when a physical level change is detected (0..3).
   // Translates discrete level to approximate percent and updates HomeKit state.
   void handlePhysicalLevel(int level) {
-    int physPower = -1;
-    switch (level) {
-      case 0: physPower = -1; break;
-      case 1: physPower = 10; break;
-      case 2: physPower = 40; break;
-      case 3: physPower = 70; break;
-    }
+    int physPower = levelToPower(level);
     if (physPower != power) {
       power = physPower;
       active->setVal(power >= 0 ? 1 : 0);    // update HomeKit Active characteristic
       rotationSpeed->setVal(physPower > 0 ? physPower : 0); // update HomeKit RotationSpeed
+      syncCurrentState();
       Serial.print("Physical level set power to ");
       Serial.println(physPower);
     }
   }
 
 private:
+  void syncCurrentState() {
+    int state = power >= 0 ? 2 : 0;  // PURIFYING : INACTIVE
+    if (currentState->getVal() != state) currentState->setVal(state);
+  }
+
   // Handle a command coming from Home (HomeKit). Keeps existing behavior.
   void applyPowerFromHome(int percent) {
     Serial.print("applyPowerFromHome: percent=");
@@ -143,14 +170,14 @@ private:
 
     if (percent < 0) {
       Serial.println("OFF STATE, emulating if needed");
-      if (lastLevel == 3) {
-        emulateButtonPress(millis());
+      if (lastLevel >= 1) {
+        emulateButtonPresses(4 - lastLevel, millis());  // button cycles 1 -> 2 -> 3 -> off
       }
       power = -1;
     } else {
       if (lastLevel < 1) {
         Serial.println("FAN off, emulate button press");
-        emulateButtonPress(millis());
+        emulateButtonPresses(1, millis());
       }
       power = percent;
     }
@@ -163,35 +190,36 @@ private:
 
 MyPurifier *myPurifierInstance = nullptr;
 
-// Start emulation: bring EMULATEPIN LOW for a short time and ignore level readings
-void emulateButtonPress(unsigned long now) {
-  if (!emulating) {
-    Serial.println("Starting emulation - disable analog logging for 1s");
-    emulating = true;
-    emulateStartTime = now;
-    digitalWrite(EMULATEPIN, LOW);     // start emulation (active low in original code)
-    ignoreLevelUntil = now + 1000;     // ignore level changes for 1000 ms after emulation
-  }
+// Start one press: bring EMULATEPIN LOW for a short time and ignore level readings
+void startButtonPress(unsigned long now) {
+  Serial.println("Starting emulation - ignoring level changes");
+  emulating = true;
+  pendingPresses--;
+  emulateStartTime = now;
+  digitalWrite(EMULATEPIN, LOW);
+  ignoringLevel = true;
+  ignoreLevelStart = now;
+}
+
+void emulateButtonPresses(int count, unsigned long now) {
+  if (emulating || pendingPresses > 0) return;
+  pendingPresses = count;
+  startButtonPress(now);
 }
 
 // Log and react to level changes. Called when measured discrete level differs from lastLevel.
 void logLevelChange(int level, unsigned long now) {
   if (level != lastLevel) {
     lastLevel = level;
-    myPurifierInstance->handlePhysicalLevel(lastLevel);  // notify Home accessory
 
-    // If we are in ignore window, skip logging and physical apply
-    if (now < ignoreLevelUntil) {
+    // Level change caused by our own emulation: keep the power requested from Home
+    if (isIgnoringLevel(now)) {
       return;
     }
 
-    int power = -1;
-    switch (lastLevel) {
-      case 0: power = -1; break;
-      case 1: power = 10; break;
-      case 2: power = 40; break;
-      case 3: power = 70; break;
-    }
+    if (myPurifierInstance) myPurifierInstance->handlePhysicalLevel(lastLevel);  // notify Home accessory
+
+    int power = levelToPower(lastLevel);
 
     Serial.print("LEVEL ");
     Serial.println(lastLevel);
@@ -201,18 +229,24 @@ void logLevelChange(int level, unsigned long now) {
   }
 }
 
-// Try to (re-)initialize the task watchdog with a given timeout (ms).
-esp_err_t try_reinit_wdt(uint32_t timeout_ms) {
-  // Attempt deinit if available, then init with new config
-  #ifdef ESP_TASK_WDT_DEINIT
-  esp_err_t e = esp_task_wdt_deinit();
-  Serial.print("esp_task_wdt_deinit(): "); Serial.println((int)e);
-  #endif
+void factoryReset() {
+  Serial.println("Button held - factory reset");
+  clearConfig();
+  homeSpan.processSerialCommand("F");  // erases HomeKit pairing and reboots
+}
 
-  esp_task_wdt_config_t cfg = {};
-  cfg.timeout_ms = timeout_ms;
-  cfg.idle_core_mask = 0;
-  return esp_task_wdt_init(&cfg);
+// EMULATEPIN is open-drain, so while we don't drive it LOW it reads the physical button
+void checkFactoryResetHold(unsigned long now) {
+  if (emulating || digitalRead(EMULATEPIN) == HIGH) {
+    buttonHeld = false;
+    return;
+  }
+  if (!buttonHeld) {
+    buttonHeld = true;
+    buttonHoldStart = now;
+  } else if (now - buttonHoldStart >= FACTORY_RESET_HOLD_MS) {
+    factoryReset();
+  }
 }
 
 void setup() {
@@ -223,13 +257,7 @@ void setup() {
   Serial.begin(115200);
   delay(100);
 
-  // Reinitialize WDT with 15s timeout if possible
-  esp_err_t r = try_reinit_wdt(15000);
-  if (r == ESP_OK) Serial.println("Reinit WDT OK");
-  else Serial.print("Reinit WDT failed: "); Serial.println((int)r);
-
-  // Add current task to watchdog
-  esp_task_wdt_add(NULL);
+  ledcAttachChannel(PWMPIN, 1000, LEDCRES, LEDCCHANNEL);
 
   // Ensure fan is OFF initially
   applyPower(-1);
@@ -239,16 +267,24 @@ void setup() {
   pinMode(SIGNAL_PIN, INPUT);
   attachInterrupt(digitalPinToInterrupt(SIGNAL_PIN), signalISR, CHANGE);
 
-  // Configure emulate pin (active low in emulation) and set it HIGH (idle)
-  pinMode(EMULATEPIN, OUTPUT);
+  // Open-drain like the real button: only pulls TP4 to GND, released (HIGH) when idle
+  pinMode(EMULATEPIN, OUTPUT_OPEN_DRAIN);
   digitalWrite(EMULATEPIN, HIGH);
 
-  // Keep original PWM attachment call (left unchanged to preserve behavior)
-  ledcAttachChannel(PWMPIN, 1000, LEDCRES, LEDCCHANNEL);
+  DeviceConfig config = loadConfig();
+  if (config.ssid.isEmpty()) {
+    portalMode = true;
+    startConfigPortal();
+    digitalWrite(LED_PIN, LOW);
+    return;
+  }
 
-  // HomeSpan WiFi and accessory initialization (keep original settings)
-  homeSpan.setWifiCredentials("YOUR_WIFI_SSID", "YOUR_WIFI_PASSWORD");
-  homeSpan.setPairingCode("12345678"); //Your pair code
+  homeSpan.setWifiCredentials(config.ssid.c_str(), config.password.c_str());
+  if (!config.pairingCodeApplied) {
+    homeSpan.setPairingCode(config.pairingCode.c_str());  // slow (SRP), so only once after the portal
+    markPairingCodeApplied();
+  }
+  homeSpan.enableWatchdog(15); // Reboots the ESP32 if homeSpan.poll() isn't called for 15s
   homeSpan.begin(Category::AirPurifiers, "Purifier Uppatvind");
 
   new SpanAccessory();
@@ -262,16 +298,25 @@ void setup() {
 }
 
 void loop() {
-  // Let HomeSpan handle HomeKit tasks
-  homeSpan.poll();
+  if (portalMode) {
+    handleConfigPortal();
+  } else {
+    homeSpan.poll();
+  }
 
   unsigned long now = millis();
+  checkFactoryResetHold(now);
 
   // Emulation completion logic: after ~100 ms set emulate pin HIGH again
-  if (emulating && (now - emulateStartTime >= 100)) {
+  if (emulating && (now - emulateStartTime >= EMULATE_PRESS_MS)) {
     digitalWrite(EMULATEPIN, HIGH);
-    Serial.println("Emulation ended - pin 23 HIGH");
+    Serial.println("Emulation ended - button released");
     emulating = false;
+    emulateEndTime = now;
+  }
+
+  if (!emulating && pendingPresses > 0 && (now - emulateEndTime >= EMULATE_GAP_MS)) {
+    startButtonPress(now);
   }
 
   // Periodic processing block (every logInterval ms)
@@ -281,23 +326,27 @@ void loop() {
 
     // If ISR signaled new pulse data, copy values under critical section and compute duty
     if (pulseAvailable) {
-      noInterrupts();
+      portENTER_CRITICAL(&isrMux);
       unsigned long highT = highDuration;
       unsigned long lowT = lowDuration;
       pulseAvailable = false;
-      interrupts();
+      portEXIT_CRITICAL(&isrMux);
 
       unsigned long period = highT + lowT;
       if (period > 0) {
         dutyCycle = (highT * 100.0f) / period;
       }
       level = getLevel(dutyCycle);
+    } else {
+      // No edges: LED is either fully off or fully on (100% duty)
+      level = digitalRead(SIGNAL_PIN) ? 3 : 0;
     }
 
-    // If computed level differs from last known, handle it
-    if (lastLevel != level) {
+    // Accept a new level only when two consecutive samples agree (filters single glitches)
+    if (level != lastLevel && level == pendingLevel) {
       logLevelChange(level, now);
     }
+    pendingLevel = level;
 
     // Simple heartbeat on-board LED toggle (visible activity)
     if (ledState) {
@@ -308,8 +357,5 @@ void loop() {
     ledState = !ledState;
 
     lastLogTime = now;
-
-    // Reset watchdog to show the main loop is alive
-    esp_task_wdt_reset();
   }
 }
