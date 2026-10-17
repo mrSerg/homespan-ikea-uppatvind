@@ -17,6 +17,7 @@ const unsigned long EMULATE_PRESS_MS = 100;  // how long the emulated button is 
 const unsigned long EMULATE_GAP_MS = 300;    // pause between consecutive emulated presses
 const unsigned long IGNORE_LEVEL_MS = 2000;  // must outlast two level samples (debounce)
 const unsigned long FACTORY_RESET_HOLD_MS = 5000;  // hold the purifier button this long to reset Wi-Fi and pairing
+const unsigned long RESET_BLINK_INTERVAL_MS = 500;  // emulated press period while signalling a reset
 
 // Timing variables updated by ISR to measure pulse widths
 volatile unsigned long riseTime = 0;
@@ -36,7 +37,6 @@ uint8_t getLevel(float dutyCycle) {
   else return 3;
 }
 
-// Translate discrete level (0..3) to approximate percent (-1 means off)
 int levelToPower(int level) {
   switch (level) {
     case 1: return 10;
@@ -230,14 +230,50 @@ void logLevelChange(int level, unsigned long now) {
   }
 }
 
+uint8_t measureLevel() {
+  // No edges: LED is either fully off or fully on (100% duty)
+  if (!pulseAvailable) return digitalRead(SIGNAL_PIN) ? 3 : 0;
+
+  portENTER_CRITICAL(&isrMux);
+  unsigned long highT = highDuration;
+  unsigned long lowT = lowDuration;
+  pulseAvailable = false;
+  portEXIT_CRITICAL(&isrMux);
+
+  unsigned long period = highT + lowT;
+  return getLevel(period > 0 ? (highT * 100.0f) / period : 0.0f);
+}
+
+void pressButtonNow() {
+  digitalWrite(EMULATEPIN, LOW);
+  delay(EMULATE_PRESS_MS);
+  digitalWrite(EMULATEPIN, HIGH);
+}
+
+void signalFactoryReset() {
+  while (digitalRead(EMULATEPIN) == LOW) delay(10);  // emulated presses only work once the real button is released
+  delay(EMULATE_GAP_MS);
+  pulseAvailable = false;
+  delay(logInterval);
+
+  int presses = 8 + (4 - measureLevel()) % 4;  // ~5s of blinking, ending with the original board off
+  for (int i = 0; i < presses; i++) {
+    pressButtonNow();
+    delay(RESET_BLINK_INTERVAL_MS - EMULATE_PRESS_MS);
+  }
+}
+
 void factoryReset() {
   Serial.println("Button held - factory reset");
+  homeSpan.disableWatchdog();
+  applyPower(-1);
+  signalFactoryReset();
   clearConfig();
   homeSpan.processSerialCommand("F");  // erases HomeKit pairing and reboots
 }
 
-// EMULATEPIN is open-drain, so while we don't drive it LOW it reads the physical button
 void checkFactoryResetHold(unsigned long now) {
+  // EMULATEPIN is open-drain, so while we don't drive it LOW it reads the physical button
   if (emulating || digitalRead(EMULATEPIN) == HIGH) {
     buttonHeld = false;
     return;
@@ -322,26 +358,7 @@ void loop() {
 
   // Periodic processing block (every logInterval ms)
   if (now - lastLogTime >= logInterval) {
-    float dutyCycle = 0.0f;
-    uint8_t level = 0;
-
-    // If ISR signaled new pulse data, copy values under critical section and compute duty
-    if (pulseAvailable) {
-      portENTER_CRITICAL(&isrMux);
-      unsigned long highT = highDuration;
-      unsigned long lowT = lowDuration;
-      pulseAvailable = false;
-      portEXIT_CRITICAL(&isrMux);
-
-      unsigned long period = highT + lowT;
-      if (period > 0) {
-        dutyCycle = (highT * 100.0f) / period;
-      }
-      level = getLevel(dutyCycle);
-    } else {
-      // No edges: LED is either fully off or fully on (100% duty)
-      level = digitalRead(SIGNAL_PIN) ? 3 : 0;
-    }
+    uint8_t level = measureLevel();
 
     // Accept a new level only when two consecutive samples agree (filters single glitches)
     if (level != lastLevel && level == pendingLevel) {
