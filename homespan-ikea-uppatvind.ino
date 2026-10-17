@@ -268,7 +268,7 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(SIGNAL_PIN), signalISR, CHANGE);
 
   // Open-drain like the real button: only pulls TP4 to GND, released (HIGH) when idle
-  pinMode(EMULATEPIN, OUTPUT_OPEN_DRAIN);
+  pinMode(EMULATEPIN, OUTPUT_OPEN_DRAIN | PULLUP);  // pull-up keeps the line HIGH when not wired to the purifier
   digitalWrite(EMULATEPIN, HIGH);
 
   DeviceConfig config = loadConfig();
