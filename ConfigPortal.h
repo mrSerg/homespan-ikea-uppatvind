@@ -148,8 +148,10 @@ const char *PORTAL_HEAD =
   "input[type=file]{height:auto;padding:14px 16px}"
   "hr{border:0;border-top:1px solid #dfdfdf;margin:40px 0 0}"
   "a[href^=tel]{color:inherit;text-decoration:none}"
-  ".bar{height:8px;background:#dfdfdf;border-radius:4px;overflow:hidden;margin:12px 0 4px}"
-  ".bar i{display:block;height:100%;width:0;background:#0058a3;transition:width .2s}"
+  "#fwoverlay{position:fixed;inset:0;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;font-weight:700}"
+  "#fwoverlay[hidden]{display:none}"
+  ".spinner{width:56px;height:56px;border:6px solid #dfdfdf;border-top-color:#0058a3;border-radius:50%;animation:spin 1s linear infinite}"
+  "@keyframes spin{to{transform:rotate(360deg)}}"
   "</style></head><body><header><b>UPPÅTVIND</b><span>Apple Home setup</span></header><main>";
 
 const char *PORTAL_FOOT = "</main></body></html>";
@@ -176,11 +178,11 @@ const char *NETWORKS_POLL_SCRIPT =
 
 const char *FIRMWARE_UPLOAD_SCRIPT =
   "<script>fw.onsubmit=function(e){e.preventDefault();var x=new XMLHttpRequest();x.open('POST','/update');"
-  "x.upload.onprogress=function(p){var v=Math.round(p.loaded*100/p.total);fwbar.style.width=v+'%';"
+  "x.upload.onprogress=function(p){var v=Math.round(p.loaded*100/p.total);"
   "fwstatus.textContent=v<100?'Uploading '+v+'%':'Installing... do not power off'};"
   "x.onload=function(){document.open();document.write(x.responseText);document.close()};"
-  "x.onerror=function(){fwstatus.textContent='Upload failed. Reconnect to the setup Wi-Fi and try again.'};"
-  "fwprogress.hidden=false;fw.querySelector('button').disabled=true;x.send(new FormData(fw))}</script>";
+  "x.onerror=function(){fwoverlay.hidden=true;alert('Upload failed. Reconnect to the setup Wi-Fi and try again.')};"
+  "fwoverlay.hidden=false;x.send(new FormData(fw))}</script>";
 
 String portalPage() {
   return String(PORTAL_HEAD) +
@@ -200,8 +202,8 @@ String portalPage() {
     "<form id=fw method=post action=/update enctype=multipart/form-data>"
     "<input type=file name=firmware accept=.bin required>"
     "<small>Firmware .bin file (Arduino IDE: Sketch → Export Compiled Binary).</small>"
-    "<div id=fwprogress hidden><div class=bar><i id=fwbar></i></div><small id=fwstatus></small></div>"
-    "<button class=secondary>Upload and install</button></form>" + FIRMWARE_UPLOAD_SCRIPT +
+    "<button class=secondary>Upload and install</button></form>"
+    "<div id=fwoverlay hidden><div class=spinner></div><div id=fwstatus>Uploading...</div></div>" + FIRMWARE_UPLOAD_SCRIPT +
     (portalScanning ? NETWORKS_POLL_SCRIPT : "") + PORTAL_FOOT;
 }
 
