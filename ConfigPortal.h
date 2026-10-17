@@ -6,6 +6,8 @@
 #include <Preferences.h>
 #include <HomeSpan.h>
 #include <qrcode.h>
+#include <vector>
+#include <algorithm>
 
 const char *AP_SSID = "IKEA-Uppatvind";
 const char *AP_PASSWORD = "uppatvind";
@@ -126,7 +128,8 @@ const char *PORTAL_HEAD =
   ".code{font-size:40px;font-weight:600;letter-spacing:2px;text-align:center;margin:12px 0}"
   ".qr{display:block;width:220px;margin:0 auto}"
   ".warning{font-weight:700;text-align:center;color:#c00;margin:12px 0}"
-  "input,button{width:100%;font-size:17px;padding:12px;margin:6px 0;box-sizing:border-box;border-radius:8px;border:1px solid #bbb}"
+  "input,select,button{width:100%;font-size:17px;padding:12px;margin:6px 0;box-sizing:border-box;border-radius:8px;border:1px solid #bbb;background:#fff}"
+  "label{display:flex;align-items:center;gap:8px;margin:6px 0}label input{width:auto;margin:0}"
   "button{background:#0071e3;color:#fff;border:0}.secondary{background:#e8e8ed;color:#111}"
   "small{display:block;color:#666;margin-top:4px}"
   "</style></head><body>";
@@ -146,14 +149,19 @@ String portalPage() {
     "<h2>Wi-Fi network</h2>"
     "<form method=post action=/save>"
     "<input type=hidden name=code value=" + portalPairingCode + ">"
-    "<input name=ssid list=networks placeholder='Network name' autocapitalize=none required>"
-    "<datalist id=networks>" + portalNetworkOptions + "</datalist>"
-    "<input name=password type=password placeholder=Password>"
-    "<button>Save and connect</button></form></body></html>";
+    "<select name=network onchange=\"other.hidden=this.value!=''\">" + portalNetworkOptions +
+    "<option value=''" + (portalNetworkOptions.isEmpty() ? " selected" : "") + ">Other network...</option></select>"
+    "<input id=other name=other_ssid placeholder='Network name' autocapitalize=none" +
+    (portalNetworkOptions.isEmpty() ? "" : " hidden") + ">"
+    "<input id=password name=password type=password placeholder=Password>"
+    "<label><input type=checkbox onclick=\"password.type=this.checked?'text':'password'\">Show password</label>"
+    "<button>Save and connect</button></form>"
+    "<form method=post action=/scan><button class=secondary>Scan again</button></form></body></html>";
 }
 
 void handlePortalSave() {
-  String ssid = portalServer.arg("ssid");
+  String ssid = portalServer.arg("network");
+  if (ssid.isEmpty()) ssid = portalServer.arg("other_ssid");
   String code = portalServer.arg("code");
   if (ssid.isEmpty() || !isAllowedPairingCode(code)) {
     portalServer.sendHeader("Location", "/");
@@ -170,23 +178,39 @@ void handlePortalSave() {
   ESP.restart();
 }
 
+void scanForNetworks() {
+  int count = WiFi.scanNetworks();
+  std::vector<int> order;
+  for (int i = 0; i < count; i++) order.push_back(i);
+  std::sort(order.begin(), order.end(), [](int a, int b) { return WiFi.RSSI(a) > WiFi.RSSI(b); });
+
+  std::vector<String> seen;
+  portalNetworkOptions = "";
+  for (int i : order) {
+    String ssid = WiFi.SSID(i);
+    if (ssid.isEmpty() || std::find(seen.begin(), seen.end(), ssid) != seen.end()) continue;
+    seen.push_back(ssid);
+    portalNetworkOptions += "<option>" + htmlEscape(ssid) + "</option>";
+  }
+  WiFi.scanDelete();
+}
+
 void startConfigPortal() {
   portalPairingCode = generatePairingCode();
 
-  WiFi.mode(WIFI_STA);
-  int count = WiFi.scanNetworks();
-  for (int i = 0; i < count; i++) {
-    portalNetworkOptions += "<option value=\"" + htmlEscape(WiFi.SSID(i)) + "\">";
-  }
-  WiFi.scanDelete();
-
-  WiFi.mode(WIFI_AP);
+  WiFi.mode(WIFI_AP_STA);
+  scanForNetworks();
   WiFi.softAP(AP_SSID, AP_PASSWORD);
   portalDns.start(53, "*", WiFi.softAPIP());
 
   portalServer.on("/", HTTP_GET, []() { portalServer.send(200, "text/html", portalPage()); });
   portalServer.on("/new-code", HTTP_POST, []() {
     portalPairingCode = generatePairingCode();
+    portalServer.sendHeader("Location", "/");
+    portalServer.send(303);
+  });
+  portalServer.on("/scan", HTTP_POST, []() {
+    scanForNetworks();
     portalServer.sendHeader("Location", "/");
     portalServer.send(303);
   });
