@@ -23,9 +23,11 @@ The board simply attaches to the existing control PCB using four wires:
     * Physical button presses
     * Home app commands
 * On-board LED heartbeat (blinks to indicate activity or running state)
-* Setup from the phone — without Wi-Fi the purifier starts its own access point with a one-page setup
-* Hold the purifier button for 5 seconds to reset Wi-Fi and HomeKit pairing
-* No web interface or cloud dependency
+* **Setup from the phone** — without Wi-Fi the purifier starts its own access point with a one-page setup:
+  pairing QR code and code, Wi-Fi network list, firmware upload
+* **OTA firmware updates** from the same setup page — no cable needed once the board is inside the purifier
+* **Factory reset** by holding the purifier button for 5 seconds, confirmed by the purifier LED blinking
+* No cloud dependency — the web page exists only in setup mode
 
 ---
 
@@ -145,7 +147,9 @@ Board connections
 
 2. **Open in Arduino IDE**
 
-    * Install the [HomeSpan](https://github.com/HomeSpan/HomeSpan) library.
+    * Install the **esp32 by Espressif** boards package, version **3.x** (tested with 3.3.8).
+    * Install the [HomeSpan](https://github.com/HomeSpan/HomeSpan) library (tested with 2.1.8).
+      Everything else (web server, QR code generator, OTA) comes with the ESP32 core.
     * Select the correct board: **ESP32 Dev Module**.
     * Set **Tools → Partition Scheme → Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)** — HomeSpan doesn't fit the default
       1.2MB app partition, and OTA updates need two app slots.
@@ -167,6 +171,8 @@ Board connections
     * Choose your home network, enter its password and press *Save and connect*. The purifier reboots
       and joins your network; the setup access point is gone until the next reset.
 
+   <img src="assets/setup-page.jpg" alt="Setup page with pairing QR code and code" width="300">
+
 5. **Pair with Apple Home**
 
     * In the **Apple Home app** tap *Add Accessory → More options*, pick **Purifier Uppatvind**
@@ -176,13 +182,18 @@ Board connections
 ### Firmware update (OTA)
 
 Reset the purifier (see below) to start the setup access point, open the setup page and use **Firmware update** at the
-bottom. Upload the `.bin` file from **Sketch → Export Compiled Binary** in Arduino IDE. Wi-Fi settings are erased by the
-reset, so connect to Wi-Fi again after the update.
+bottom. Upload the `.bin` file from **Sketch → Export Compiled Binary** in Arduino IDE (the file without `bootloader`,
+`partitions` or `merged` in its name). Uploading takes about 20–40 seconds; keep the page open until it shows
+*Update installed*. Wi-Fi settings and pairing are erased by the reset, so set up Wi-Fi and add the purifier to Home again
+after the update.
+
+The first flash must be done over USB with the partition scheme above — the default scheme has no room for OTA.
 
 ### Reset
 
-Hold the purifier button for **5 seconds**: Wi-Fi settings and HomeKit pairing are erased and the
-setup access point starts again. Remove the old purifier from the Home app before adding it again.
+Hold the purifier button for **5 seconds** and release it. The fan stops and the purifier LED cycles through the levels
+for about 5 seconds — that means the reset was accepted. Wi-Fi settings and HomeKit pairing are erased and the setup
+access point starts again. Remove the old purifier from the Home app before adding it again.
 
 ---
 
