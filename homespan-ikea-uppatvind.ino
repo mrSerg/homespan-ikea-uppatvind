@@ -144,6 +144,11 @@ struct MyPurifier : Service::AirPurifier {
     return true;
   }
 
+  void loop() override {
+    // valid-values only hides AUTO in the UI; Home still writes it when the tile is tapped
+    if (targetState->getVal() != 0) targetState->setVal(0);
+  }
+
   // Called when a physical level change is detected (0..3).
   // Translates discrete level to approximate percent and updates HomeKit state.
   void handlePhysicalLevel(int level) {
