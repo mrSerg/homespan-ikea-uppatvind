@@ -125,6 +125,7 @@ struct MyPurifier : Service::AirPurifier {
     active = new Characteristic::Active(0);
     currentState = new Characteristic::CurrentAirPurifierState(0);  // required by HomeKit, without it Home hides speed control
     targetState = new Characteristic::TargetAirPurifierState(0);    // MANUAL
+    targetState->setValidValues(1, 0);  // no air quality sensor, so hide AUTO
     rotationSpeed = new Characteristic::RotationSpeed(0);
   }
 

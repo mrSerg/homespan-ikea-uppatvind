@@ -147,7 +147,8 @@ Board connections
 
     * Install the [HomeSpan](https://github.com/HomeSpan/HomeSpan) library.
     * Select the correct board: **ESP32 Dev Module**.
-    * Set **Tools → Partition Scheme → Huge APP (3MB No OTA/1MB SPIFFS)** — HomeSpan doesn't fit the default 1.2MB app partition.
+    * Set **Tools → Partition Scheme → Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)** — HomeSpan doesn't fit the default
+      1.2MB app partition, and OTA updates need two app slots.
     * Open `homespan-ikea-uppatvind.ino`.
 
 3. **Flash the firmware**
@@ -171,6 +172,12 @@ Board connections
     * In the **Apple Home app** tap *Add Accessory → More options*, pick **Purifier Uppatvind**
       and enter the pairing code from the setup page, or scan the saved QR code (e.g. shown on another screen).
     * After setup, the device will automatically reconnect after reboot.
+
+### Firmware update (OTA)
+
+Reset the purifier (see below) to start the setup access point, open the setup page and use **Firmware update** at the
+bottom. Upload the `.bin` file from **Sketch → Export Compiled Binary** in Arduino IDE. Wi-Fi settings are erased by the
+reset, so connect to Wi-Fi again after the update.
 
 ### Reset
 
