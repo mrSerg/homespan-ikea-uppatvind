@@ -15,6 +15,7 @@ const int LEDCRES = 8; // PWM resolution (bits)
 
 const unsigned long EMULATE_PRESS_MS = 100;  // how long the emulated button is held
 const unsigned long EMULATE_GAP_MS = 300;    // pause between consecutive emulated presses
+const unsigned long BOARD_SYNC_DELAY_MS = 3000;  // let the Home slider settle before pressing the button
 const unsigned long IGNORE_LEVEL_MS = 2000;  // must outlast two level samples (debounce)
 const unsigned long FACTORY_RESET_HOLD_MS = 5000;  // hold the purifier button this long to reset Wi-Fi and pairing
 const unsigned long RESET_BLINK_INTERVAL_MS = 500;  // emulated press period while signalling a reset
@@ -37,6 +38,13 @@ uint8_t getLevel(float dutyCycle) {
   else return 3;
 }
 
+int powerToLevel(int percent) {
+  if (percent < 0) return 0;
+  if (percent <= 33) return 1;
+  if (percent <= 66) return 2;
+  return 3;
+}
+
 int levelToPower(int level) {
   switch (level) {
     case 1: return 10;
@@ -54,6 +62,8 @@ unsigned long ignoreLevelStart = 0; // when the ignore window started (ms)
 int pendingLevel = -1;              // level seen once, waiting for confirmation by the next sample
 bool emulating = false;             // are we currently emulating a button press?
 int pendingPresses = 0;             // emulated presses still to perform
+int requestedLevel = -1;            // board level requested from Home, -1 when none is waiting
+unsigned long levelRequestTime = 0; // when the last level was requested from Home (ms)
 unsigned long emulateStartTime = 0; // when the current press started (ms)
 unsigned long emulateEndTime = 0;   // when the last press was released (ms)
 unsigned long lastLogTime = 0;      // last time we logged / toggled LED (ms)
@@ -131,9 +141,6 @@ struct MyPurifier : Service::AirPurifier {
 
   // Called by HomeKit when user changes characteristics (toggle or speed)
   boolean update() override {
-    // Reject Home updates right after emulation so Home doesn't show a state that was never applied
-    if (isIgnoringLevel(millis())) return false;
-
     // Determine new power: if Active is off -> -1, otherwise use rotationSpeed
     int newPower = active->getNewVal() ? rotationSpeed->getNewVal() : -1;
     if (newPower != power) {
@@ -169,24 +176,12 @@ private:
     if (currentState->getVal() != state) currentState->setVal(state);
   }
 
-  // Handle a command coming from Home (HomeKit). Keeps existing behavior.
   void applyPowerFromHome(int percent) {
     Serial.print("applyPowerFromHome: percent=");
     Serial.println(percent);
 
-    if (percent < 0) {
-      Serial.println("OFF STATE, emulating if needed");
-      if (lastLevel >= 1) {
-        emulateButtonPresses(4 - lastLevel, millis());  // button cycles 1 -> 2 -> 3 -> off
-      }
-      power = -1;
-    } else {
-      if (lastLevel < 1) {
-        Serial.println("FAN off, emulate button press");
-        emulateButtonPresses(1, millis());
-      }
-      power = percent;
-    }
+    pressToBoardLevel(powerToLevel(percent));
+    power = percent;
 
     // Call common routine to physically apply power to the motor
     applyPower(percent);
@@ -207,10 +202,17 @@ void startButtonPress(unsigned long now) {
   ignoreLevelStart = now;
 }
 
-void emulateButtonPresses(int count, unsigned long now) {
-  if (emulating || pendingPresses > 0) return;
-  pendingPresses = count;
-  startButtonPress(now);
+void pressToBoardLevel(int target) {
+  requestedLevel = target;
+  levelRequestTime = millis();
+}
+
+void syncBoardLevel(unsigned long now) {
+  if (requestedLevel < 0 || emulating || pendingPresses > 0 || now - levelRequestTime < BOARD_SYNC_DELAY_MS) return;
+  int from = max(lastLevel, 0);
+  pendingPresses = (requestedLevel - from + 4) % 4;  // button cycles off -> 1 -> 2 -> 3 -> off
+  Serial.printf("Board level %d -> %d: %d press(es)\n", from, requestedLevel, pendingPresses);
+  requestedLevel = -1;
 }
 
 // Log and react to level changes. Called when measured discrete level differs from lastLevel.
@@ -357,6 +359,7 @@ void loop() {
     emulateEndTime = now;
   }
 
+  syncBoardLevel(now);
   if (!emulating && pendingPresses > 0 && (now - emulateEndTime >= EMULATE_GAP_MS)) {
     startButtonPress(now);
   }

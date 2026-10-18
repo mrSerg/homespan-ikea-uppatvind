@@ -126,9 +126,9 @@ Board connections
   its internal state.
 * When the **Home app** changes the purifier state (On/Off or speed), the ESP32:
 
-    * If purifier is off → simulates one physical press to power it on.
-    * If purifier is turned off → simulates as many presses as needed to cycle the original board to off
-      (the button cycles 1 → 2 → 3 → off).
+    * The fan speed changes immediately. 3 seconds after the last change (so dragging the slider doesn't click the
+      button on every step) it simulates as many presses as needed to bring the original board and its LED to the matching level:
+      off, 1–33 % → level 1, 34–66 % → level 2, 67–100 % → level 3 (the button cycles off → 1 → 2 → 3 → off).
     * Adjusts the PWM output frequency to match the desired speed.
 * LED signal analysis is based on **PWM high/low timing** to infer brightness and thus speed mode.
   A new level is accepted only after two consecutive matching samples, to filter glitches.
