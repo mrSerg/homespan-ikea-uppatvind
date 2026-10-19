@@ -71,6 +71,7 @@ const unsigned long logInterval = 500; // logging interval (ms)
 bool ledState = false;              // internal LED toggle state for heartbeat
 bool portalMode = false;            // no Wi-Fi configured: serving the config portal instead of HomeKit
 bool buttonHeld = false;            // is the physical button currently held?
+bool buttonReleasedSinceBoot = false; // has the button line been seen HIGH since power-up?
 unsigned long buttonHoldStart = 0;  // when the physical button was pressed (ms)
 
 bool isIgnoringLevel(unsigned long now) {
@@ -267,12 +268,12 @@ void signalFactoryReset() {
   for (int i = 0; i < presses; i++) {
     pressButtonNow();
     delay(RESET_BLINK_INTERVAL_MS - EMULATE_PRESS_MS);
+    homeSpan.resetWatchdog();
   }
 }
 
 void factoryReset() {
   Serial.println("Button held - factory reset");
-  homeSpan.disableWatchdog();
   applyPower(-1);
   signalFactoryReset();
   clearConfig();
@@ -281,7 +282,8 @@ void factoryReset() {
 
 void checkFactoryResetHold(unsigned long now) {
   // EMULATEPIN is open-drain, so while we don't drive it LOW it reads the physical button
-  if (emulating || digitalRead(EMULATEPIN) == HIGH) {
+  if (digitalRead(EMULATEPIN) == HIGH) buttonReleasedSinceBoot = true;
+  if (emulating || !buttonReleasedSinceBoot || digitalRead(EMULATEPIN) == HIGH) {  // LOW since power-up is not a press
     buttonHeld = false;
     return;
   }
@@ -300,6 +302,14 @@ void setup() {
 
   Serial.begin(115200);
   delay(100);
+
+  homeSpan.enableWatchdog(5); // must stay 5s: a longer timeout misses the window to reboot before the purifier supply sags
+
+  if (esp_reset_reason() == ESP_RST_POWERON) {
+    WiFi.mode(WIFI_STA);  // on the purifier supply Wi-Fi only survives a software-reset boot, so the power-on boot just warms up the radio
+    delay(1000);
+    ESP.restart();
+  }
 
   ledcAttachChannel(PWMPIN, 1000, LEDCRES, LEDCCHANNEL);
 
@@ -328,7 +338,10 @@ void setup() {
     homeSpan.setPairingCode(config.pairingCode.c_str());  // slow (SRP), so only once after the portal
     markPairingCodeApplied();
   }
-  homeSpan.enableWatchdog(15); // Reboots the ESP32 if homeSpan.poll() isn't called for 15s
+  homeSpan.setWifiBegin([](const char *ssid, const char *pwd) {
+    WiFi.setTxPower(WIFI_TX_POWER);
+    WiFi.begin(ssid, pwd);
+  });
   homeSpan.begin(Category::AirPurifiers, "Purifier Uppatvind");
 
   new SpanAccessory();
@@ -344,6 +357,7 @@ void setup() {
 void loop() {
   if (portalMode) {
     handleConfigPortal();
+    homeSpan.resetWatchdog();
   } else {
     homeSpan.poll();
   }

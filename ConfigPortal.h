@@ -12,6 +12,7 @@
 
 const char *AP_SSID = "IKEA-Uppatvind";
 const char *AP_PASSWORD = "uppatvind";
+const wifi_power_t WIFI_TX_POWER = WIFI_POWER_15dBm;  // lower peak current for the weak purifier supply
 
 struct DeviceConfig {
   String ssid;
@@ -233,6 +234,7 @@ void handleFirmwareUpload() {
     Update.begin(UPDATE_SIZE_UNKNOWN);
   } else if (upload.status == UPLOAD_FILE_WRITE) {
     Update.write(upload.buf, upload.currentSize);
+    homeSpan.resetWatchdog();  // the whole upload runs inside one handleClient() call
   } else if (upload.status == UPLOAD_FILE_END) {
     Update.end(true);
   } else if (upload.status == UPLOAD_FILE_ABORTED) {
@@ -280,6 +282,7 @@ void startConfigPortal() {
 
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(AP_SSID, AP_PASSWORD);
+  WiFi.setTxPower(WIFI_TX_POWER);
   startNetworkScan();
   portalDns.start(53, "*", WiFi.softAPIP());
 
