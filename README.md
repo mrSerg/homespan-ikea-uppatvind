@@ -204,8 +204,27 @@ access point starts again. Remove the old purifier from the Home app before addi
 | **LED Signal**  | Provides PWM waveform representing purifier speed (OFF/LOW/MED/HIGH). |
 | **PWM Control** | ESP32 outputs PWM with frequency mapping to speed levels (75–320 Hz). |
 | **Button Sim.** | Digital pulse (~100 ms) emulates the purifier’s tactile button press. |
-| **Watchdog**    | HomeSpan watchdog reboots the ESP32 if the firmware hangs for 15 s.   |
+| **Watchdog**    | HomeSpan watchdog reboots the ESP32 if the firmware hangs for 5 s.    |
 | **HomeSpan**    | Handles HomeKit (Apple Home) pairing and state synchronization.       |
+
+### Power-up on the purifier supply
+
+The purifier's 5 V rail (TP3) can't deliver the current spike of the first Wi-Fi start right after power-on: the ESP32
+browns out inside `WiFi.begin()` and stays dead without rebooting. Delaying Wi-Fi, lowering the CPU clock to 80 MHz or
+the TX power to 8.5 dBm did not help. What works is a two-stage boot:
+
+* On a power-on reset (`ESP_RST_POWERON`) the firmware only switches the radio to station mode, waits 1 s and calls
+  `ESP.restart()`. HomeKit and Wi-Fi start on the following software-reset boot, which the supply survives.
+* The watchdog is enabled first thing in `setup()` with a 5 s timeout and is never disabled (also not during reset or
+  OTA upload) — a longer timeout misses the window to reboot before the supply sags.
+* Wi-Fi TX power is limited to 15 dBm to lower the peak current.
+* The factory-reset hold only counts after the button line has been seen HIGH since boot, so a line held LOW during
+  power-up isn't mistaken for a 5-second press.
+
+The real fix is hardware: a 470–1000 µF capacitor on the ESP32 VIN. Don't remove the two-stage boot without it.
+
+When the device misbehaves only inside the purifier (no serial log there), a temporary build that writes the reset
+reason and the last reached stage to NVS on every boot, read back over USB afterwards, is what found this.
 
 ---
 
@@ -233,6 +252,7 @@ access point starts again. Remove the old purifier from the Home app before addi
 * The physical button only gives four discrete levels (OFF / 1 / 2 / 3); from Apple Home the speed is set smoothly (0–100%).
 * PWM frequency mapping may vary slightly depending on fan hardware tolerance.
 * Requires shared GND with purifier control board.
+* The purifier supply is too weak for a cold Wi-Fi start; the firmware works around it with an extra reboot after power-on (see *Power-up on the purifier supply*).
 
 ---
 
