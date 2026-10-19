@@ -22,6 +22,7 @@ The board simply attaches to the existing control PCB using four wires:
 
     * Physical button presses
     * Home app commands
+* **Temperature and humidity** in Apple Home from an optional DHT11 sensor (not shown in Home when it isn't connected)
 * On-board LED heartbeat (blinks to indicate activity or running state)
 * **Setup from the phone** — without Wi-Fi the purifier starts its own access point with a one-page setup:
   pairing QR code and code, Wi-Fi network list, firmware upload
@@ -56,6 +57,7 @@ Below is the basic wiring setup between the ESP32 dev board and the purifier con
 |  EMULATEPIN   = GPIO 25 (Output) |
 |  PWMPIN       = GPIO 18 (PWM Out)|
 |  LED_PIN      = GPIO 2  (Status) |
+|  DHT_PIN      = GPIO 15 (DHT11)  |
 |  GND          = Common Ground    |
 |  VIN          = +5v              |
 +----------------------------------+
@@ -71,6 +73,7 @@ Below is the basic wiring setup between the ESP32 dev board and the purifier con
 | **Button Emulation**  | GPIO 25   | Output    | Simulates a physical button press        |
 | **Fan Control (PWM)** | GPIO 18   | Output    | Controls fan power by PWM frequency      |
 | **Status LED**        | GPIO 2    | Output    | Indicates board is alive / operational   |
+| **DHT11 Data**        | GPIO 15   | Input     | Temperature and humidity sensor (3V3)    |
 | **Ground**            | GND       | Common    | Shared reference with purifier board     |
 | **+5v**               | VIN       | Input     | Get power for ESP32 board                |
 
@@ -149,6 +152,8 @@ Board connections
 
     * Install the **esp32 by Espressif** boards package, version **3.x** (tested with 3.3.8).
     * Install the [HomeSpan](https://github.com/HomeSpan/HomeSpan) library (tested with 2.1.8).
+    * Install the **DHT sensor library** by Adafruit (tested with 1.4.7) together with its dependency
+      **Adafruit Unified Sensor**.
       Everything else (web server, QR code generator, OTA) comes with the ESP32 core.
     * Select the correct board: **ESP32 Dev Module**.
     * Set **Tools → Partition Scheme → Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)** — HomeSpan doesn't fit the default

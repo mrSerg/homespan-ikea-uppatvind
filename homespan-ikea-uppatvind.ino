@@ -1,11 +1,13 @@
 #include <Arduino.h>
 #include <HomeSpan.h> //Library for Apple Homekit
+#include <DHT.h>
 #include "ConfigPortal.h"
 
 #define PWMPIN 18  // PWM control for the fan
 #define SIGNAL_PIN 35 // Read the LED signal
 #define LED_PIN 2  // On-board LED on most ESP32 boards
 #define EMULATEPIN 25 // Pin used to emulate a physical button press
+#define DHT_PIN 15 // DHT11 temperature and humidity sensor data
 
 const int MIN_FREQ = 75;   // minimum frequency used when mapping percent->frequency
 const int MAX_FREQ = 320;  // maximum frequency used when mapping percent->frequency
@@ -19,6 +21,9 @@ const unsigned long BOARD_SYNC_DELAY_MS = 3000;  // let the Home slider settle b
 const unsigned long IGNORE_LEVEL_MS = 2000;  // must outlast two level samples (debounce)
 const unsigned long FACTORY_RESET_HOLD_MS = 5000;  // hold the purifier button this long to reset Wi-Fi and pairing
 const unsigned long RESET_BLINK_INTERVAL_MS = 500;  // emulated press period while signalling a reset
+const unsigned long CLIMATE_READ_INTERVAL_MS = 10000;  // how often temperature and humidity are sent to Home
+const int CLIMATE_PROBE_ATTEMPTS = 3;
+const unsigned long CLIMATE_PROBE_GAP_MS = 1100;  // DHT11 needs at least 1s between reads
 
 // Timing variables updated by ISR to measure pulse widths
 volatile unsigned long riseTime = 0;
@@ -29,6 +34,8 @@ volatile bool pulseAvailable = false;    // flag set by ISR when a new pulse mea
 
 // Mutex protecting timing variables in ISR / main loop
 portMUX_TYPE isrMux = portMUX_INITIALIZER_UNLOCKED;
+
+DHT dht(DHT_PIN, DHT11);
 
 // Map measured duty cycle to discrete physical levels (0..3)
 uint8_t getLevel(float dutyCycle) {
@@ -192,6 +199,36 @@ private:
 
 MyPurifier *myPurifierInstance = nullptr;
 
+struct MyTemperatureSensor : Service::TemperatureSensor {
+  SpanCharacteristic *temperature;
+
+  MyTemperatureSensor()
+    : Service::TemperatureSensor() {
+    temperature = new Characteristic::CurrentTemperature(0);
+  }
+
+  void loop() override {
+    if (temperature->timeVal() < CLIMATE_READ_INTERVAL_MS) return;
+    float value = dht.readTemperature();  // the library caches a read for 2s, so both sensors share one measurement
+    if (!isnan(value)) temperature->setVal(value);
+  }
+};
+
+struct MyHumiditySensor : Service::HumiditySensor {
+  SpanCharacteristic *humidity;
+
+  MyHumiditySensor()
+    : Service::HumiditySensor() {
+    humidity = new Characteristic::CurrentRelativeHumidity(0);
+  }
+
+  void loop() override {
+    if (humidity->timeVal() < CLIMATE_READ_INTERVAL_MS) return;
+    float value = dht.readHumidity();
+    if (!isnan(value)) humidity->setVal(value);
+  }
+};
+
 // Start one press: bring EMULATEPIN LOW for a short time and ignore level readings
 void startButtonPress(unsigned long now) {
   Serial.println("Starting emulation - ignoring level changes");
@@ -295,6 +332,17 @@ void checkFactoryResetHold(unsigned long now) {
   }
 }
 
+bool climateSensorConnected() {
+  dht.begin();
+  for (int i = 0; i < CLIMATE_PROBE_ATTEMPTS; i++) {
+    if (dht.read(true)) return true;
+    delay(CLIMATE_PROBE_GAP_MS);
+    homeSpan.resetWatchdog();
+  }
+  Serial.println("DHT11 not found - temperature and humidity are not exposed to Home");
+  return false;
+}
+
 void setup() {
   // Initialize LED pin and show activity while booting
   pinMode(LED_PIN, OUTPUT);
@@ -349,6 +397,11 @@ void setup() {
   new Characteristic::Identify();
 
   myPurifierInstance = new MyPurifier();
+
+  if (climateSensorConnected()) {
+    new MyTemperatureSensor();
+    new MyHumiditySensor();
+  }
 
   // Turn off boot LED to indicate setup finished
   digitalWrite(LED_PIN, LOW);
